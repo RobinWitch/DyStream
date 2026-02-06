@@ -1,0 +1,53 @@
+# ---------------- core ----------------
+numpy==1.26.4
+scipy==1.17.0
+pandas==3.0.0
+scikit-learn==1.8.0
+
+# ---------------- torch & vision ----------------
+torch==2.10.0
+torchvision==0.25.0
+torchmetrics==1.8.2
+pytorch-lightning==2.6.0
+lightning==2.6.0
+torch_ema @ git+https://github.com/fadel/pytorch_ema@d661859ad4206217afb274be709837d19218b3f8
+
+# ---------------- vision / media ----------------
+opencv-python==4.13.0.90
+opencv-contrib-python==4.11.0.86
+Pillow==11.3.0
+scikit-image==0.26.0
+imageio==2.37.2
+imageio-ffmpeg==0.6.0
+moviepy==1.0.3
+lpips==0.1.4
+
+# ---------------- audio ----------------
+librosa==0.11.0
+soundfile==0.13.1
+sounddevice==0.5.5
+soxr==1.0.0
+audioread==3.1.0
+
+# ---------------- nlp / diffusion ----------------
+transformers==4.57.6
+tokenizers==0.22.2
+sentencepiece==0.2.1
+diffusers==0.36.0
+huggingface-hub==0.36.0
+safetensors==0.7.0
+timm==1.0.24
+
+# ---------------- utils ----------------
+einops==0.8.1
+omegaconf==2.3.0
+PyYAML==6.0.3
+tqdm==4.67.1
+regex==2026.1.15
+requests==2.32.5
+python-dotenv==1.2.1
+fire==0.7.1
+GitPython==3.1.46
+
+# ---------------- logging / tracking ----------------
+wandb==0.24.0

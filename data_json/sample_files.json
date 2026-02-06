@@ -1,0 +1,26 @@
+[
+    {
+        "origin_video_path": null,
+        "resampled_video_path": "img_files/3.png",
+        "audio_path": "wav_files/_sgIH81kj78-Scene-005+audio_full.wav",
+        "audio_self_path": "wav_files/_sgIH81kj78-Scene-005+audio_v3_1.wav",
+        "audio_other_path": "wav_files/_sgIH81kj78-Scene-005+audio_v3_0.wav",
+        "motion_self_path": "img_files/3.npz",
+        "motion_other_path": null,
+        "mode": "test_wild",
+        "dataset_type": "dyadic",
+        "video_id": "_sgIH81kj78-Scene-005+audio_v3_2"
+    },
+    {
+        "origin_video_path": null,
+        "resampled_video_path": "img_files/11.png",
+        "audio_path": "wav_files/11.wav",
+        "audio_self_path": "wav_files/11.wav",
+        "audio_other_path": null,
+        "motion_self_path": "img_files/11.npz",
+        "motion_other_path": null,
+        "mode": "test_wild",
+        "dataset_type": "dyadic",
+        "video_id": "single_speaker_11_11"
+    }
+]

@@ -1,0 +1,127 @@
+exp_name: debug
+save_dir: ./outputs
+tools_path: .
+debug: False
+test_first: True
+test: True
+seed: 222
+resume_ckpt: null
+
+latent_loss_vel_weight: 50
+threshold: 0.5
+
+trainer:
+  max_steps: 300001
+  accelerator: gpu
+  log_every_n_steps: 1
+data:
+  module_name: datasets.single_dyadic_prev_audio
+  class_name: DyadicTalking
+  train_bs: 64
+  val_bs: 64
+  num_workers: 4
+  meta_paths: []
+  val_meta_paths: []
+  test_meta_paths:
+  - data_json/sample_files.json
+  pose_norm: false
+  random_mix: 0.0
+  get_audio: true
+  get_motion: true
+  motion_dim: 512
+  training_mode: listener
+model:
+  module_name: model.motion_generation.motion_gen_0630_gpt_flowmatching_addaudio_linear
+  class_name: Audio2FaceGPT
+  ema_decay: 0.999
+  model_type: ${model.class_name}
+  pose_fps: 25
+  audio_rep: wave16k
+  audio_sr: 16000
+  audio_fps: ${model.audio_sr}
+  audio_norm: false
+  hidden_size: 512
+  ffn_dim: 2048
+  seed_frames: 8
+  pose_length: 32
+  vae_codebook_size: ${data.motion_dim}
+  denoising_steps: ${validation.denoising_steps}
+  seed: ${seed}
+  motion_bank_size: 256
+  heads: 8
+  attention_head_dim: 64
+  layers: 4
+  reconstruction_script: single_reconstruction_0506.py
+  blend_frames: false
+  drop_style: 0.3
+  drop_other: 0.0
+  drop_self: 0.0
+  drop_fusion: 0.1
+  drop_prev_motion: 0.0
+  
+  drop_gpt: 0.1
+  cfg_gpt: 1.0
+  cfg_prev_motion: 0.0
+  cfg_style: 1.0
+  cfg_fusion: 2.0
+
+  drop_audio: 0.1
+  drop_anchor: 0.1
+  cfg_audio: 0.5
+  cfg_anchor: 0
+  cfg_audio_anchor: 1.0
+
+  drop_audio_other: 0.1
+  cfg_audio_other: 0.5
+  cfg_all: 1.0
+
+  sync_only: true
+  wav2vec_layer: 8
+  use_init_motion: false
+  strength: 1.0
+  window_size: 8
+  total_iter: 600000
+  eval_metrics: false
+  version: '0506'
+  two_step: False
+  infer_32: False
+  prev_audio_frames: 32
+  qk_norm: "rms_norm_across_heads"
+  eps: 1e-6
+  cross_attn_norm: true
+  added_kv_proj_dim: null
+  cbh_window_length: 96
+validation:
+  validation_steps: 200000
+  test_steps: 1
+  save_every_n_steps: 60000
+  save_top_k: -1
+  denoising_steps: 5
+noise_offset: 0.05
+snr_gamma: 0.0
+snr_n: 0.0
+snr_type: power
+snr_start: 0
+snr_end: 1000
+is_test: True
+enable_zero_snr: false
+smooth_gamma: 1.0
+noise_scheduler_kwargs:
+  num_train_timesteps: 1000
+  shift: 1
+  use_karras_sigmas: false
+solver:
+  gradient_accumulation_steps: 1
+  gradient_checkpointing: false
+  max_train_steps: ${trainer.max_steps}
+  max_grad_norm: 0.99
+  learning_rate: 0
+  scale_lr: false
+  lr_warmup_steps: 1000
+  lr_scheduler: constant_with_warmup
+  use_8bit_adam: false
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_weight_decay: 0.01
+  adam_epsilon: 1.0e-08
+  lr_reset: true

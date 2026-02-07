@@ -6,6 +6,7 @@ We are gradually releasing the code for this project.
 
 ## TODO List
 - [x] Offline video generation
+- [x] Gradio Demo
 - [ ] Online video generation
 - [ ] Training code
 
@@ -32,12 +33,18 @@ rm -rf DyStream
 
 ## Quick Start
 
+Launch the Gradio Web Demo
+```bash
+CUDA_VISIBLE_DEVICES=0 python -u app.py
+```
+
+Alternatively, you can start the demo using the provided shell script:
 Run the demo with a single command:
 ```bash
 bash run.sh
 ```
 
-## Running with Your Own Data
+## Batch Inference with Custom Data
 
 ### Configuration
 Configuration files can be referenced and changed in `data_json/sample_files.json`. We provide examples for two scenarios:

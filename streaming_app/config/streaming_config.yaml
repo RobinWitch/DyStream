@@ -18,11 +18,26 @@ streaming:
   cfg_anchor: 0.0
   cfg_all: 1.0
 
-  # Optimization
-  use_torch_compile: false       # Disabled for stability (can cause issues)
-  use_int8_quantization: false   # Disabled (Wav2Vec2 is part of DyStream model)
-  use_torch_compile_motion: false # Compile motion model (experimental)
-  frame_encoding_quality: 80     # JPEG quality (speed vs size)
+  # Optimization — KV-cache
+  use_kv_cache: true                        # KV-cache for GPT autoregressive loop (saves ~50% on 2nd iteration)
+  use_torch_compile_gpt_loop: true          # torch.compile the full GPT block loop (adds ~15s to first-run warmup)
+
+  # Optimization — torch.compile
+  use_torch_compile_motion: false           # Compile GPT blocks (incompatible with KV-cache; +2ms without KV-cache)
+  use_torch_compile_flow_estimator: true    # torch.compile flow_estimator (max-autotune-no-cudagraphs)
+  use_torch_compile_face_generator: true    # torch.compile face_generator (max-autotune-no-cudagraphs)
+  use_torch_compile_render_combined: true   # Compile flow+face as single graph (overrides individual compiles)
+  frame_encoding_quality: 80               # JPEG quality (speed vs size)
+
+  # Optimization — TensorRT (requires tensorrt + torch-tensorrt packages)
+  use_tensorrt: true                        # Master TRT switch
+  use_tensorrt_wav2vec: false                # DISABLED: FP16 TRT degrades Wav2Vec2 attention accuracy
+  use_tensorrt_face_generator: false         # DISABLED: torch_tensorrt incompatible with SPADE decoder; torch.compile used
+  use_tensorrt_diffusion_head: true         # torch_tensorrt for diffusion MLP head
+  tensorrt_cache_dir: "streaming_app/cache/tensorrt"  # Engine cache directory
+
+  # Optimization — MediaPipe
+  use_mediapipe_gpu: true                   # Try GPU delegate (fallback to CPU)
 
   # Buffering
   client_buffer_frames: 1        # Minimal buffering

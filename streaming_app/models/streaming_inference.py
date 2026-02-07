@@ -38,6 +38,11 @@ class StreamingInferenceEngine:
         self.audio_sr = config.get('audio_sample_rate', 16000)
         self.pose_fps = config.get('target_fps', 25)
 
+        # KV-cache for GPT autoregressive loop
+        self.model._use_kv_cache = config.get('use_kv_cache', True)
+        # torch.compile for GPT block loop (requires use_kv_cache=True)
+        self.model._use_torch_compile_gpt_loop = config.get('use_torch_compile_gpt_loop', False)
+
         # CFG parameters
         self.cfg_audio = config.get('cfg_audio', 0.5)
         self.cfg_audio_other = config.get('cfg_audio_other', 0.5)
@@ -53,27 +58,27 @@ class StreamingInferenceEngine:
         # Rolling past motion (1, inpainting_length, 512)
         self.past_motion: Optional[torch.Tensor] = None
 
-    def initialize_context(self, motion_anchor: np.ndarray):
+    def initialize_context(self, motion_anchor):
         """
         Initialize anchor motion (single frame).
 
         Args:
-            motion_anchor: Motion latent (512,) or (1, 512) or (T, 512)
+            motion_anchor: Motion latent as numpy (512,)/(1,512)/(T,512) or torch.Tensor
         """
         if motion_anchor is None:
             raise ValueError("motion_anchor is None")
 
         if isinstance(motion_anchor, torch.Tensor):
-            motion_anchor_np = motion_anchor.detach().cpu().numpy()
+            t = motion_anchor.detach().float()
         else:
-            motion_anchor_np = np.asarray(motion_anchor)
+            t = torch.as_tensor(np.asarray(motion_anchor), dtype=torch.float32)
 
-        if motion_anchor_np.ndim == 1:
-            motion_anchor_np = motion_anchor_np[None, :]
-        elif motion_anchor_np.ndim == 2 and motion_anchor_np.shape[0] > 1:
-            motion_anchor_np = motion_anchor_np[:1, :]
+        if t.dim() == 1:
+            t = t.unsqueeze(0)
+        if t.shape[0] > 1:
+            t = t[:1]
 
-        anchor_tensor = torch.from_numpy(motion_anchor_np).float().unsqueeze(0).to(self.device)  # (1, 1, 512)
+        anchor_tensor = t.unsqueeze(0).to(self.device)  # (1, 1, 512)
         self.motion_anchor = anchor_tensor
         self.past_motion = anchor_tensor.repeat(1, self.inpainting_length, 1)
 
@@ -104,8 +109,8 @@ class StreamingInferenceEngine:
             raise RuntimeError("Motion anchor not initialized. Call initialize_context() first.")
 
         # Convert raw audio to tensors (for compatibility with one_clip_only_inference)
-        audio_self_tensor = torch.from_numpy(audio_self_raw).float().unsqueeze(0).to(self.device)
-        audio_other_tensor = torch.from_numpy(audio_other_raw).float().unsqueeze(0).to(self.device)
+        audio_self_tensor = torch.as_tensor(audio_self_raw, dtype=torch.float32, device=self.device).unsqueeze(0)
+        audio_other_tensor = torch.as_tensor(audio_other_raw, dtype=torch.float32, device=self.device).unsqueeze(0)
 
         # Override CFG parameters (same as app.py)
         self.model.cfg_audio = self.cfg_audio

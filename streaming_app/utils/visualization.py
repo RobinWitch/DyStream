@@ -13,6 +13,20 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+class CombinedRenderPipeline(torch.nn.Module):
+    """Wraps flow_estimator + face_generator so they can be torch.compiled as one graph."""
+
+    def __init__(self, flow_estimator, face_generator):
+        super().__init__()
+        self.flow_estimator = flow_estimator
+        self.face_generator = face_generator
+
+    def forward(self, anchor_motion, motion_latent, face_features):
+        optical_flow = self.flow_estimator(anchor_motion, motion_latent)
+        rgb_frame = self.face_generator(optical_flow, face_features)
+        return rgb_frame
+
+
 class FrameRenderer:
     """Renders motion latents to video frames."""
 
@@ -22,13 +36,15 @@ class FrameRenderer:
         face_generator,
         flow_estimator,
         device: torch.device,
-        jpeg_quality: int = 80
+        jpeg_quality: int = 80,
+        combined_pipeline=None,
     ):
         self.face_encoder = face_encoder
         self.face_generator = face_generator
         self.flow_estimator = flow_estimator
         self.device = device
         self.jpeg_quality = jpeg_quality
+        self.combined_pipeline = combined_pipeline
 
         # Cached values for efficiency
         self.cached_face_features = None
@@ -88,6 +104,38 @@ class FrameRenderer:
             h, w, _ = rgb.shape
             return w, h, rgb.tobytes()
 
+    def render_frame_numpy(
+        self,
+        motion_latent: torch.Tensor,
+        reference_image: Optional[torch.Tensor] = None
+    ) -> np.ndarray:
+        """
+        Render a single motion latent to numpy uint8 array (H, W, 3).
+        Avoids the tobytes()/frombuffer() round-trip of render_frame_raw.
+        """
+        with torch.no_grad():
+            if motion_latent.dim() == 2:
+                motion_latent = motion_latent.unsqueeze(1)
+            frame = self._generate_frame(motion_latent, reference_image)
+            return self._tensor_to_uint8(frame)
+
+    def render_frame_gpu(
+        self,
+        motion_latent: torch.Tensor,
+        reference_image: Optional[torch.Tensor] = None
+    ) -> tuple:
+        """
+        Render and return both GPU tensor and numpy uint8.
+
+        Returns:
+            (gpu_tensor (1,3,H,W) in [-1,1], numpy_uint8 (H,W,3))
+        """
+        with torch.no_grad():
+            if motion_latent.dim() == 2:
+                motion_latent = motion_latent.unsqueeze(1)
+            frame = self._generate_frame(motion_latent, reference_image)
+            return frame, self._tensor_to_uint8(frame)
+
     def initialize_reference(
         self,
         reference_image: torch.Tensor,
@@ -132,13 +180,10 @@ class FrameRenderer:
         Returns:
             RGB frame tensor (1, 3, 512, 512)
         """
-        # 1. Update reference image if provided
-        if reference_image is not None and (
-            self.cached_reference_image is None or
-            not torch.equal(self.cached_reference_image, reference_image)
-        ):
+        # 1. Update reference image if provided (skip if already cached)
+        if reference_image is not None and self.cached_reference_image is None:
             logger.info("Updating reference image and face features")
-            self.cached_reference_image = reference_image.clone()
+            self.cached_reference_image = reference_image
             with torch.no_grad():
                 self.cached_face_features = self.face_encoder(reference_image)
 
@@ -158,20 +203,19 @@ class FrameRenderer:
             motion_latent = motion_latent.unsqueeze(1)  # (1, 1, 512)
         motion_latent = motion_latent.to(self.device)
 
-        # 5. Compute optical flow from anchor to current motion
-        # Reference: app.py:401 - flow_estimator(source_motion, target_motion)
+        # 5-6. Render: flow estimation + face generation
         with torch.no_grad():
-            optical_flow = self.flow_estimator(
-                self.anchor_motion,  # Source: anchor (1, 1, 512)
-                motion_latent        # Target: current (1, 1, 512)
-            )  # Output: (1, 2, 512, 512) - optical flow field
-
-            # 6. Generate RGB frame from optical flow and face features
-            # Reference: app.py:402 - face_generator(flow, face_features)
-            rgb_frame = self.face_generator(
-                optical_flow,
-                self.cached_face_features
-            )  # Output: (1, 3, 512, 512)
+            if self.combined_pipeline is not None:
+                rgb_frame = self.combined_pipeline(
+                    self.anchor_motion, motion_latent, self.cached_face_features
+                )
+            else:
+                optical_flow = self.flow_estimator(
+                    self.anchor_motion, motion_latent
+                )
+                rgb_frame = self.face_generator(
+                    optical_flow, self.cached_face_features
+                )
 
         return rgb_frame
 
@@ -180,42 +224,23 @@ class FrameRenderer:
         Convert tensor to PIL Image.
 
         Args:
-            tensor: Image tensor (1, 3, H, W) in range [0, 1] or [-1, 1]
+            tensor: Image tensor (1, 3, H, W) in range [-1, 1]
 
         Returns:
             PIL Image
         """
-        # Move to CPU and remove batch dimension
-        tensor = tensor.squeeze(0).cpu()
-
-        # Normalize to [0, 1] if needed
-        if tensor.min() < 0:
-            tensor = (tensor + 1) / 2
-
-        # Clamp to [0, 1]
-        tensor = torch.clamp(tensor, 0, 1)
-
-        # Convert to numpy (H, W, C)
-        np_image = tensor.permute(1, 2, 0).numpy()
-
-        # Convert to uint8
-        np_image = (np_image * 255).astype(np.uint8)
-
-        # Create PIL Image
-        pil_image = Image.fromarray(np_image)
-
-        return pil_image
+        np_image = self._tensor_to_uint8(tensor)
+        return Image.fromarray(np_image)
 
     def _tensor_to_uint8(self, tensor: torch.Tensor) -> np.ndarray:
         """
         Convert tensor to uint8 RGB array (H, W, 3).
+        Performs [-1,1]→[0,255] on GPU then transfers the smaller uint8 tensor.
         """
-        tensor = tensor.squeeze(0).cpu()
-        if tensor.min() < 0:
-            tensor = (tensor + 1) / 2
-        tensor = torch.clamp(tensor, 0, 1)
-        np_image = tensor.permute(1, 2, 0).numpy()
-        return (np_image * 255).astype(np.uint8)
+        tensor = tensor.squeeze(0)
+        # GPU-side: [-1,1] → [0,255] as uint8 (transfers 0.75MB vs 3MB float32)
+        tensor = ((tensor + 1.0) * 127.5).clamp(0, 255).byte()
+        return tensor.permute(1, 2, 0).cpu().numpy()
 
     def _encode_jpeg(self, image: Image.Image) -> bytes:
         """

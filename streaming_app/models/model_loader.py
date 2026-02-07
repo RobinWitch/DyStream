@@ -45,6 +45,10 @@ class ModelLoader:
         self.config = config
         logger.info(f"Loading models on device: {self.device}")
 
+        # Enable TF32 tensor cores for float32 matmuls (~1.5-2x faster on Ampere+)
+        torch.set_float32_matmul_precision('high')
+        logger.info("TF32 matmul precision enabled")
+
         try:
             # Load DyStream motion generation model (includes Wav2Vec2 encoders)
             logger.info("Loading DyStream motion generation model...")
@@ -240,36 +244,160 @@ class ModelLoader:
             return {}
 
     def _optimize_models(self, config: Dict[str, Any]):
-        """Apply optimizations to models."""
+        """Apply optimizations: torch.compile (always) then TensorRT (opt-in)."""
+        use_trt = config.get('use_tensorrt', False)
+        use_combined_render = config.get('use_torch_compile_render_combined', False)
 
-        # Note: Wav2Vec2 INT8 quantization is skipped as it's part of DyStream model
-        # and quantizing it may cause issues with the integrated architecture
+        vis = self.models.get('visualization')
+        dystream = self.models.get('dystream')
 
-        # Torch Compile (optional - may cause issues with complex models)
-        if config.get('use_torch_compile', False) and hasattr(torch, 'compile'):
-            logger.info("torch.compile is disabled by default for stability")
-            logger.info("Enable with caution - may cause issues with DyStream model")
-            # Uncomment to enable:
-            # try:
-            #     self.models['dystream'] = torch.compile(
-            #         self.models['dystream'],
-            #         mode='reduce-overhead'
-            #     )
-            #     logger.info("torch.compile applied successfully")
-            # except Exception as e:
-            #     logger.warning(f"Failed to apply torch.compile: {e}")
+        # ── Fix face_generator identity_grid device ──
+        if vis:
+            fg = vis['face_generator']
+            if hasattr(fg, 'identity_grid') and fg.identity_grid.device != self.device:
+                fg.identity_grid = fg.identity_grid.to(self.device)
 
-        # Motion model compile (experimental)
-        if config.get('use_torch_compile_motion', False) and hasattr(torch, 'compile'):
+        # ── Combined render pipeline (flow_estimator + face_generator as one graph) ──
+        if vis and use_combined_render and hasattr(torch, 'compile'):
             try:
-                logger.info("Applying torch.compile to motion model (experimental)")
-                self.models['dystream'] = torch.compile(
-                    self.models['dystream'],
-                    mode='reduce-overhead'
+                from streaming_app.utils.visualization import CombinedRenderPipeline
+                logger.info("torch.compile → CombinedRenderPipeline (flow + face)")
+                combined = CombinedRenderPipeline(
+                    vis['flow_estimator'], vis['face_generator']
+                ).to(self.device)
+                vis['combined_pipeline'] = torch.compile(
+                    combined, mode='max-autotune-no-cudagraphs',
                 )
-                logger.info("torch.compile applied to motion model")
+                logger.info("CombinedRenderPipeline compiled")
             except Exception as e:
-                logger.warning(f"Failed to apply torch.compile to motion model: {e}")
+                logger.warning(f"Combined render compile failed ({e}), falling back to individual")
+                use_combined_render = False
+
+        # ── Individual compiles (only if not using combined) ──
+        if vis and not use_combined_render:
+            # flow_estimator: always torch.compile (torch.qr blocks TRT)
+            if config.get('use_torch_compile_flow_estimator', True) and hasattr(torch, 'compile'):
+                try:
+                    logger.info("torch.compile → flow_estimator")
+                    vis['flow_estimator'] = torch.compile(
+                        vis['flow_estimator'],
+                        mode='max-autotune-no-cudagraphs',
+                    )
+                except Exception as e:
+                    logger.warning(f"flow_estimator compile failed: {e}")
+
+            # face_generator
+            fg = vis['face_generator']
+            if use_trt and config.get('use_tensorrt_face_generator', True):
+                try:
+                    self._trt_face_generator(vis, fg, config)
+                except Exception as e:
+                    logger.warning(f"TRT face_generator failed ({e}), falling back to torch.compile")
+                    vis['face_generator'] = torch.compile(
+                        fg, mode='max-autotune-no-cudagraphs'
+                    )
+            elif config.get('use_torch_compile_face_generator', True) and hasattr(torch, 'compile'):
+                try:
+                    logger.info("torch.compile → face_generator")
+                    vis['face_generator'] = torch.compile(
+                        fg, mode='max-autotune-no-cudagraphs'
+                    )
+                except Exception as e:
+                    logger.warning(f"face_generator compile failed: {e}")
+
+        # ── GPT Transformer blocks (torch.compile) ──
+        if config.get('use_torch_compile_motion', False) and dystream and hasattr(torch, 'compile'):
+            try:
+                logger.info("torch.compile → GPT Transformer blocks")
+                for i in range(len(dystream.blocks)):
+                    dystream.blocks[i] = torch.compile(
+                        dystream.blocks[i],
+                        mode='max-autotune-no-cudagraphs',
+                    )
+                logger.info(f"Compiled {len(dystream.blocks)} GPT blocks")
+            except Exception as e:
+                logger.warning(f"GPT blocks compile failed: {e}")
+
+        # ── Wav2Vec2 encoders ──
+        if use_trt and config.get('use_tensorrt_wav2vec', True) and dystream:
+            self._trt_wav2vec(dystream, config)
+
+        # ── diffusion_head ──
+        if use_trt and config.get('use_tensorrt_diffusion_head', True) and dystream:
+            self._trt_diffusion_head(dystream, config)
+
+    # ── TRT builders ──────────────────────────────────────────────────────
+
+    def _trt_face_generator(self, vis: dict, fg, config: Dict[str, Any]):
+        """TRT-ify face_generator via torch_tensorrt (handles 5D grid_sample).
+        Uses FP32 only — FP16 causes NaN in SPADE decoder."""
+        from streaming_app.models.tensorrt_wrapper import compile_with_torch_tensorrt
+
+        logger.info("torch_tensorrt (FP32) → face_generator")
+        dummy_latent = torch.randn(1, 1, 512, device=self.device)
+        dummy_feats = torch.randn(1, 32, 16, 64, 64, device=self.device)
+        vis['face_generator'] = compile_with_torch_tensorrt(
+            fg, (dummy_latent, dummy_feats), fp16=False,
+        )
+        # Verify output is not NaN
+        with torch.no_grad():
+            test_out = vis['face_generator'](dummy_latent, dummy_feats)
+            if torch.isnan(test_out).any():
+                raise RuntimeError("face_generator TRT output contains NaN")
+        logger.info("face_generator TRT (FP32) active")
+
+    def _trt_wav2vec(self, dystream, config: Dict[str, Any]):
+        """TRT-ify both Wav2Vec2 encoders via ONNX → native TRT.
+        Stores TRT wrappers in self.models['wav2vec_trt'] dict (NOT on dystream
+        model itself, to avoid EMA parameter count mismatch)."""
+        from streaming_app.models.tensorrt_wrapper import build_wav2vec_trt
+
+        cache_dir = config.get('tensorrt_cache_dir', 'streaming_app/cache/tensorrt')
+        # Fixed input len: window_samples(61440) + lookahead(640) + padding(80) = 62160
+        input_len = 62160
+        trt_encoders = {}
+
+        for attr_name, label in [
+            ('audio_encoder_face', 'wav2vec_self'),
+            ('audio_encoder_face_other', 'wav2vec_other'),
+        ]:
+            encoder = getattr(dystream, attr_name)
+            try:
+                logger.info(f"ONNX→TRT → {label}")
+                wrapped = build_wav2vec_trt(
+                    encoder, self.device, cache_dir,
+                    name=label, input_len=input_len, fp16=True,
+                )
+                trt_encoders[attr_name] = wrapped
+                logger.info(f"{label} TRT active")
+            except Exception as e:
+                logger.warning(f"TRT {label} failed: {e}")
+
+        if trt_encoders:
+            self.models['wav2vec_trt'] = trt_encoders
+
+    def _trt_diffusion_head(self, dystream, config: Dict[str, Any]):
+        """TRT-ify diffusion_head via torch_tensorrt."""
+        if not hasattr(dystream, 'diffusion_head'):
+            logger.warning("diffusion_head not found on model")
+            return
+
+        from streaming_app.models.tensorrt_wrapper import compile_with_torch_tensorrt
+
+        try:
+            n_cfg = 4 if config.get('cfg_anchor', 0.0) == 0.0 else 5
+            logger.info(f"torch_tensorrt → diffusion_head (n_cfg={n_cfg})")
+            dummy_noisy = torch.randn(n_cfg, 1, 512, device=self.device)
+            dummy_gpt = torch.randn(n_cfg, 1, 512, device=self.device)
+            dummy_temb = torch.randn(n_cfg, 1, 768, device=self.device)
+            dystream.diffusion_head = compile_with_torch_tensorrt(
+                dystream.diffusion_head,
+                (dummy_noisy, dummy_gpt, dummy_temb),
+                fp16=True,
+            )
+            logger.info("diffusion_head TRT active")
+        except Exception as e:
+            logger.warning(f"TRT diffusion_head failed: {e}")
 
     def _warmup_inference(self):
         """Run warmup inference to initialize compiled graphs."""

@@ -24,10 +24,10 @@ class RoPEEncoding(nn.Module):
         self.register_buffer('cos_angles', angles.cos())
         self.register_buffer('sin_angles', angles.sin())
 
-    def forward(self, x):
+    def forward(self, x, offset=0):
         seq_len = x.size(1)
-        cos_angles = self.cos_angles[:seq_len].to(x.device)
-        sin_angles = self.sin_angles[:seq_len].to(x.device)
+        cos_angles = self.cos_angles[offset:offset + seq_len]
+        sin_angles = self.sin_angles[offset:offset + seq_len]
         x_even = x[:, :, 0::2]
         x_odd = x[:, :, 1::2]
         x_rot = x.clone()
@@ -137,9 +137,237 @@ class PositionalEncoding(nn.Module):
         pe = pe.unsqueeze(0)
         self.register_buffer('pe', pe)
 
-    def forward(self, x):
-        x = x + self.pe[:, :x.size(1), :]
+    def forward(self, x, offset=0):
+        x = x + self.pe[:, offset:offset + x.size(1), :]
         return self.dropout(x)
+
+
+def _mha_with_cache(mha, q_input, k_input, v_input, kv_cache=None, is_causal=False):
+    """Run nn.MultiheadAttention with optional KV-cache, bypassing its forward.
+
+    Uses fused QKV projection when inputs share the same tensor (self-attention).
+
+    Args:
+        mha: nn.MultiheadAttention (must have _qkv_same_embed_dim=True)
+        q_input, k_input, v_input: (B, L, D) inputs (pre-RoPE/PE applied)
+        kv_cache: optional (cached_k, cached_v) each (B, nheads, L_cached, head_dim)
+        is_causal: apply causal mask (only when kv_cache is None)
+
+    Returns:
+        output: (B, L_q, D)
+        new_cache: (k, v) each (B, nheads, L_total, head_dim)
+    """
+    embed_dim = mha.embed_dim
+    num_heads = mha.num_heads
+    head_dim = embed_dim // num_heads
+    B = q_input.size(0)
+    w = mha.in_proj_weight
+    b = mha.in_proj_bias
+
+    # Fused QKV projection when all inputs are the same tensor
+    if q_input is k_input and k_input is v_input:
+        qkv = F.linear(q_input, w, b)
+        q, k_new, v_new = qkv.chunk(3, dim=-1)
+    elif q_input is k_input:
+        # Q and K share input (self-attn with RoPE: q=k=rope(x), v=x)
+        qk = F.linear(q_input, w[:2*embed_dim], b[:2*embed_dim] if b is not None else None)
+        q, k_new = qk.chunk(2, dim=-1)
+        v_new = F.linear(v_input, w[2*embed_dim:], b[2*embed_dim:] if b is not None else None)
+    else:
+        q = F.linear(q_input, w[:embed_dim], b[:embed_dim] if b is not None else None)
+        k_new = F.linear(k_input, w[embed_dim:2*embed_dim], b[embed_dim:2*embed_dim] if b is not None else None)
+        v_new = F.linear(v_input, w[2*embed_dim:], b[2*embed_dim:] if b is not None else None)
+
+    q = q.view(B, -1, num_heads, head_dim).transpose(1, 2)
+    k_new = k_new.view(B, -1, num_heads, head_dim).transpose(1, 2)
+    v_new = v_new.view(B, -1, num_heads, head_dim).transpose(1, 2)
+
+    if kv_cache is not None:
+        cached_k, cached_v = kv_cache
+        k = torch.cat([cached_k, k_new], dim=2)
+        v = torch.cat([cached_v, v_new], dim=2)
+        is_causal = False  # single query attends to all cached + new keys
+    else:
+        k, v = k_new, v_new
+
+    attn_out = F.scaled_dot_product_attention(q, k, v, is_causal=is_causal)
+    attn_out = attn_out.transpose(1, 2).reshape(B, -1, embed_dim)
+    out = mha.out_proj(attn_out)
+    return out, (k, v)
+
+
+def _block_forward_full(block, x, audio_features, anchor_hidden):
+    """Audio2FaceGPTBlock full forward that captures KV-cache."""
+    cache = {}
+
+    residual = x
+    x_norm = block.norm1(x)
+    x_rope = block.self_attn_rope.rope(x_norm)
+    attn_out, cache['sa_rope'] = _mha_with_cache(
+        block.self_attn_rope.self_attn, x_rope, x_rope, x_norm, is_causal=True)
+    x = residual + attn_out
+
+    residual = x
+    x = residual + block.cross_linear_audio(audio_features)
+
+    residual = x
+    x_norm = block.norm_anchor(x)
+    q_rope = block.cross_attn_anchor.rope(x_norm)
+    k_rope = block.cross_attn_anchor.rope(anchor_hidden)
+    attn_out, _ = _mha_with_cache(
+        block.cross_attn_anchor.cross_attn, q_rope, k_rope, anchor_hidden)
+    x = residual + attn_out
+
+    residual = x
+    x_norm = block.norm3(x)
+    x_pe = block.self_attn_pos.pe(x_norm)
+    attn_out, cache['sa_pos'] = _mha_with_cache(
+        block.self_attn_pos.self_attn, x_pe, x_pe, x_pe, is_causal=True)
+    x = residual + attn_out
+
+    residual = x
+    x = block.norm4(x)
+    x = block.mlp(x)
+    x = residual + x
+
+    return x, cache
+
+
+def _block_forward_incr(block, x_new, audio_new, anchor_hidden, cache, offset):
+    """Audio2FaceGPTBlock incremental forward using KV-cache. x_new is (B, 1, D)."""
+    residual = x_new
+    x_norm = block.norm1(x_new)
+    x_rope = block.self_attn_rope.rope(x_norm, offset=offset)
+    attn_out, cache['sa_rope'] = _mha_with_cache(
+        block.self_attn_rope.self_attn, x_rope, x_rope, x_norm,
+        kv_cache=cache['sa_rope'])
+    x = residual + attn_out
+
+    residual = x
+    x = residual + block.cross_linear_audio(audio_new)
+
+    residual = x
+    x_norm = block.norm_anchor(x)
+    q_rope = block.cross_attn_anchor.rope(x_norm, offset=offset)
+    k_rope = block.cross_attn_anchor.rope(anchor_hidden)
+    attn_out, _ = _mha_with_cache(
+        block.cross_attn_anchor.cross_attn, q_rope, k_rope, anchor_hidden)
+    x = residual + attn_out
+
+    residual = x
+    x_norm = block.norm3(x)
+    x_pe = block.self_attn_pos.pe(x_norm, offset=offset)
+    attn_out, cache['sa_pos'] = _mha_with_cache(
+        block.self_attn_pos.self_attn, x_pe, x_pe, x_pe,
+        kv_cache=cache['sa_pos'])
+    x = residual + attn_out
+
+    residual = x
+    x = block.norm4(x)
+    x = block.mlp(x)
+    x = residual + x
+
+    return x, cache
+
+
+# ── Compilable GPT loop (dict-free, flat cache for torch.compile) ────────
+
+def _gpt_blocks_full(blocks, x, audio, anchor):
+    """All blocks full forward. Returns x and 4 flat cache lists (no dicts).
+    Designed for torch.compile: no dict ops, no data-dependent control flow."""
+    srk = []  # sa_rope K per block
+    srv = []  # sa_rope V per block
+    spk = []  # sa_pos K per block
+    spv = []  # sa_pos V per block
+
+    for i in range(len(blocks)):
+        block = blocks[i]
+
+        residual = x
+        x_norm = block.norm1(x)
+        x_rope = block.self_attn_rope.rope(x_norm)
+        attn_out, sa_rope_kv = _mha_with_cache(
+            block.self_attn_rope.self_attn, x_rope, x_rope, x_norm, is_causal=True)
+        x = residual + attn_out
+
+        x = x + block.cross_linear_audio(audio)
+
+        residual = x
+        x_norm = block.norm_anchor(x)
+        q_rope = block.cross_attn_anchor.rope(x_norm)
+        k_rope = block.cross_attn_anchor.rope(anchor)
+        attn_out, _ = _mha_with_cache(
+            block.cross_attn_anchor.cross_attn, q_rope, k_rope, anchor)
+        x = residual + attn_out
+
+        residual = x
+        x_norm = block.norm3(x)
+        x_pe = block.self_attn_pos.pe(x_norm)
+        attn_out, sa_pos_kv = _mha_with_cache(
+            block.self_attn_pos.self_attn, x_pe, x_pe, x_pe, is_causal=True)
+        x = residual + attn_out
+
+        residual = x
+        x = block.norm4(x)
+        x = block.mlp(x)
+        x = residual + x
+
+        srk.append(sa_rope_kv[0])
+        srv.append(sa_rope_kv[1])
+        spk.append(sa_pos_kv[0])
+        spv.append(sa_pos_kv[1])
+
+    return x, srk, srv, spk, spv
+
+
+def _gpt_blocks_incr(blocks, x_new, audio_new, anchor,
+                     srk, srv, spk, spv, offset):
+    """All blocks incremental forward with flat cache lists."""
+    new_srk = []
+    new_srv = []
+    new_spk = []
+    new_spv = []
+
+    for i in range(len(blocks)):
+        block = blocks[i]
+
+        residual = x_new
+        x_norm = block.norm1(x_new)
+        x_rope = block.self_attn_rope.rope(x_norm, offset=offset)
+        attn_out, sa_rope_kv = _mha_with_cache(
+            block.self_attn_rope.self_attn, x_rope, x_rope, x_norm,
+            kv_cache=(srk[i], srv[i]))
+        x_new = residual + attn_out
+
+        x_new = x_new + block.cross_linear_audio(audio_new)
+
+        residual = x_new
+        x_norm = block.norm_anchor(x_new)
+        q_rope = block.cross_attn_anchor.rope(x_norm, offset=offset)
+        k_rope = block.cross_attn_anchor.rope(anchor)
+        attn_out, _ = _mha_with_cache(
+            block.cross_attn_anchor.cross_attn, q_rope, k_rope, anchor)
+        x_new = residual + attn_out
+
+        residual = x_new
+        x_norm = block.norm3(x_new)
+        x_pe = block.self_attn_pos.pe(x_norm, offset=offset)
+        attn_out, sa_pos_kv = _mha_with_cache(
+            block.self_attn_pos.self_attn, x_pe, x_pe, x_pe,
+            kv_cache=(spk[i], spv[i]))
+        x_new = residual + attn_out
+
+        residual = x_new
+        x_new = block.norm4(x_new)
+        x_new = block.mlp(x_new)
+        x_new = residual + x_new
+
+        new_srk.append(sa_rope_kv[0])
+        new_srv.append(sa_rope_kv[1])
+        new_spk.append(sa_pos_kv[0])
+        new_spv.append(sa_pos_kv[1])
+
+    return x_new, new_srk, new_srv, new_spk, new_spv
 
 
 def modulate(x, shift, scale):
@@ -530,49 +758,89 @@ class Audio2FaceGPT(nn.Module):
         device = audio_features.device
         audio_hidden = self.audio_proj(audio_features)
         audio_other_hidden = self.audio_other_proj(audio_other_features)
-        audio_hidden_0 = self.audio_audioother_fusion(torch.cat([audio_hidden * 0, audio_other_hidden * 0], dim=-1))
-        audio_hidden_1 = self.audio_audioother_fusion(torch.cat([audio_hidden * 1, audio_other_hidden * 0], dim=-1))
-        audio_hidden_2 = self.audio_audioother_fusion(torch.cat([audio_hidden * 0, audio_other_hidden * 1], dim=-1))
-        audio_hidden_3 = self.audio_audioother_fusion(torch.cat([audio_hidden * 1, audio_other_hidden * 1], dim=-1))
+        audio_zeros = torch.zeros_like(audio_hidden)
+        audio_other_zeros = torch.zeros_like(audio_other_hidden)
+        audio_hidden_0 = self.audio_audioother_fusion(torch.cat([audio_zeros, audio_other_zeros], dim=-1))
+        audio_hidden_1 = self.audio_audioother_fusion(torch.cat([audio_hidden, audio_other_zeros], dim=-1))
+        audio_hidden_2 = self.audio_audioother_fusion(torch.cat([audio_zeros, audio_other_hidden], dim=-1))
+        audio_hidden_3 = self.audio_audioother_fusion(torch.cat([audio_hidden, audio_other_hidden], dim=-1))
         anchor_hidden = self.anchor_embed(anchor_latent)
         causal_mask = self.generate_causal_mask(seq_len, device)
         cross_causal_mask = self.generate_cross_causal_mask(seq_len, device)
         face_hidden_last = self.face_embed(past_motion)
         face_hidden = torch.zeros(bs, seq_len, self.hidden_size, device=device)
         face_hidden[:, :self.inpainting_length] = face_hidden_last
-        face_outputs = []
-        for t in range(self.inpainting_length, seq_len):
-            x = face_hidden[:, :t]
-            x = torch.cat([x] * 5, dim=0)
-            audio_hidden_input = torch.cat(
-                [
-                    audio_hidden_0[:, :t],
-                    audio_hidden_0[:, :t],
-                    audio_hidden_1[:, :t],
-                    audio_hidden_2[:, :t],
-                    audio_hidden_3[:, :t],
-                ],
-                dim=0,
-            )
+        # Pre-compute anchor_hidden_input (constant across loop iterations)
+        anchor_zeros = torch.zeros_like(anchor_hidden)
+        skip_anchor = (self.cfg_anchor == 0.0)
+        n_cfg = 4 if skip_anchor else 5
+        if skip_anchor:
+            # 4 patterns: unconditional, audio_self, audio_other, all
             anchor_hidden_input = torch.cat(
-                [
-                    anchor_hidden * 0,
-                    anchor_hidden * 1,
-                    anchor_hidden * 0,
-                    anchor_hidden * 0,
-                    anchor_hidden * 1,
-                ],
+                [anchor_zeros, anchor_zeros, anchor_zeros, anchor_hidden],
                 dim=0,
             )
-            for block in self.blocks:
-                x = block(
-                    x,
-                    audio_hidden_input,
-                    anchor_hidden_input,
-                    causal_mask[:t, :t],
-                    cross_causal_mask[:t, :t],
-                )
-            x_t = self.output_norm(x[:, -1:])
+            audio_hidden_stack = torch.stack(
+                [audio_hidden_0, audio_hidden_1, audio_hidden_2, audio_hidden_3],
+                dim=0,
+            )
+        else:
+            # 5 patterns: unconditional, anchor, audio_self, audio_other, all
+            anchor_hidden_input = torch.cat(
+                [anchor_zeros, anchor_hidden, anchor_zeros, anchor_zeros, anchor_hidden],
+                dim=0,
+            )
+            audio_hidden_stack = torch.stack(
+                [audio_hidden_0, audio_hidden_0, audio_hidden_1, audio_hidden_2, audio_hidden_3],
+                dim=0,
+            )
+        face_outputs = []
+        use_kv_cache = getattr(self, '_use_kv_cache', True)
+        use_compiled = use_kv_cache and getattr(self, '_use_torch_compile_gpt_loop', False)
+
+        # Lazy-compile the GPT loop functions on first use
+        if use_compiled and not hasattr(self, '_compiled_gpt_full'):
+            self._compiled_gpt_full = torch.compile(
+                _gpt_blocks_full, mode='max-autotune-no-cudagraphs')
+            self._compiled_gpt_incr = torch.compile(
+                _gpt_blocks_incr, mode='max-autotune-no-cudagraphs')
+
+        kv_caches = [None] * len(self.blocks)        # dict-based path
+        c_srk = c_srv = c_spk = c_spv = None  # flat cache for compiled path
+        for t in range(self.inpainting_length, seq_len):
+            is_first = (c_srk is None) if use_compiled else (kv_caches[0] is None)
+            if is_first or not use_kv_cache:
+                # Full forward (first iteration or cache disabled)
+                x = face_hidden[:, :t].repeat(n_cfg, 1, 1)
+                audio_hidden_input = audio_hidden_stack[:, :, :t].reshape(n_cfg * bs, t, -1)
+                if use_compiled:
+                    x, c_srk, c_srv, c_spk, c_spv = self._compiled_gpt_full(
+                        self.blocks, x, audio_hidden_input, anchor_hidden_input)
+                elif use_kv_cache:
+                    for i, block in enumerate(self.blocks):
+                        x, kv_caches[i] = _block_forward_full(
+                            block, x, audio_hidden_input, anchor_hidden_input)
+                else:
+                    for block in self.blocks:
+                        x = block(
+                            x, audio_hidden_input, anchor_hidden_input,
+                            causal_mask[:t, :t], cross_causal_mask[:t, :t])
+                x_out = x[:, -1:]
+            else:
+                # Incremental: only process the new token
+                x_new = face_hidden[:, t-1:t].repeat(n_cfg, 1, 1)
+                audio_new = audio_hidden_stack[:, :, t-1:t].reshape(n_cfg * bs, 1, -1)
+                if use_compiled:
+                    x_new, c_srk, c_srv, c_spk, c_spv = self._compiled_gpt_incr(
+                        self.blocks, x_new, audio_new, anchor_hidden_input,
+                        c_srk, c_srv, c_spk, c_spv, t - 1)
+                else:
+                    for i, block in enumerate(self.blocks):
+                        x_new, kv_caches[i] = _block_forward_incr(
+                            block, x_new, audio_new, anchor_hidden_input,
+                            kv_caches[i], offset=t-1)
+                x_out = x_new
+            x_t = self.output_norm(x_out)
             gpt_output_t = self.output_proj(x_t)
             if noise_scheduler is not None:
                 latent_t = torch.randn_like(gpt_output_t[:bs])
@@ -585,14 +853,23 @@ class Audio2FaceGPT(nn.Module):
                         gpt_output_t,
                         temb=time_embedding,
                     )
-                    noise_pred_uncond, noise_pred_cond_anchor, noise_pred_cond_audio, noise_pred_cond_audio_other, noise_pred_cond_all = output_batch.chunk(5, dim=0)
-                    noise_pred = (
-                        noise_pred_uncond
-                        + self.cfg_audio * (noise_pred_cond_audio - noise_pred_uncond)
-                        + self.cfg_audio_other * (noise_pred_cond_audio_other - noise_pred_uncond)
-                        + self.cfg_anchor * (noise_pred_cond_anchor - noise_pred_uncond)
-                        + self.cfg_all * (noise_pred_cond_all - noise_pred_uncond)
-                    )
+                    if skip_anchor:
+                        noise_pred_uncond, noise_pred_cond_audio, noise_pred_cond_audio_other, noise_pred_cond_all = output_batch.chunk(4, dim=0)
+                        noise_pred = (
+                            noise_pred_uncond
+                            + self.cfg_audio * (noise_pred_cond_audio - noise_pred_uncond)
+                            + self.cfg_audio_other * (noise_pred_cond_audio_other - noise_pred_uncond)
+                            + self.cfg_all * (noise_pred_cond_all - noise_pred_uncond)
+                        )
+                    else:
+                        noise_pred_uncond, noise_pred_cond_anchor, noise_pred_cond_audio, noise_pred_cond_audio_other, noise_pred_cond_all = output_batch.chunk(5, dim=0)
+                        noise_pred = (
+                            noise_pred_uncond
+                            + self.cfg_audio * (noise_pred_cond_audio - noise_pred_uncond)
+                            + self.cfg_audio_other * (noise_pred_cond_audio_other - noise_pred_uncond)
+                            + self.cfg_anchor * (noise_pred_cond_anchor - noise_pred_uncond)
+                            + self.cfg_all * (noise_pred_cond_all - noise_pred_uncond)
+                        )
                     sigma_idx = noise_scheduler.step_index
                     if sigma_idx is None:
                         noise_scheduler._init_step_index(timestep)

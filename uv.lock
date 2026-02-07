@@ -189,22 +189,16 @@ wheels = [
 ]
 
 [[package]]
-name = "cuda-bindings"
-version = "12.9.4"
+name = "cuda-toolkit"
+version = "13.1.1"
 source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cuda-pathfinder", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/45/e7/b47792cc2d01c7e1d37c32402182524774dadd2d26339bd224e0e913832e/cuda_bindings-12.9.4-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c912a3d9e6b6651853eed8eed96d6800d69c08e94052c292fec3f282c5a817c9", size = 12210593, upload-time = "2025-10-21T14:51:36.574Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/e3/2e4ff4a27458e78ece6b637582c92e338d303e9043fe3081b13144e8b9c0/cuda_toolkit-13.1.1-py2.py3-none-any.whl", hash = "sha256:aeda5a569e73d00c331bb8103974772fe645b31f3c7982a15738df1fc7b5e7ec", size = 2373, upload-time = "2026-01-14T19:49:53.957Z" },
 ]
 
-[[package]]
-name = "cuda-pathfinder"
-version = "1.3.3"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0b/02/4dbe7568a42e46582248942f54dc64ad094769532adbe21e525e4edf7bc4/cuda_pathfinder-1.3.3-py3-none-any.whl", hash = "sha256:9984b664e404f7c134954a771be8775dfd6180ea1e1aef4a5a37d4be05d9bbb1", size = 27154, upload-time = "2025-12-04T22:35:08.996Z" },
+[package.optional-dependencies]
+cudart = [
+    { name = "nvidia-cuda-runtime", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 
 [[package]]
@@ -246,6 +240,15 @@ wheels = [
 ]
 
 [[package]]
+name = "dllist"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b2/ce/dda13123329d55555de67b414206f14f4f80b96cb273ec59d76d5ce6b5c3/dllist-2.0.0.tar.gz", hash = "sha256:7413ba963aaa1b2b6827eadd7908e40e635b19108ab431667485eaf75c492bf4", size = 5369, upload-time = "2025-02-10T15:41:07.637Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7b/07/a212ca4cfe56fa35c8315307e37df218e5946c726a792b5c7a795b245c10/dllist-2.0.0-py3-none-any.whl", hash = "sha256:cd307b1a91bc46fae084f8c817d79be7e34951b149a2fd69004772e03573bfb3", size = 5721, upload-time = "2025-02-10T15:41:06.045Z" },
+]
+
+[[package]]
 name = "dystream"
 version = "0.1.0"
 source = { virtual = "." }
@@ -268,11 +271,13 @@ dependencies = [
     { name = "moviepy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "omegaconf", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "opencv-contrib-python", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "opencv-python", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "pandas", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "pillow", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "pydantic", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "pytest", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "python-dotenv", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "python-multipart", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "pytorch-lightning", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -291,6 +296,7 @@ dependencies = [
     { name = "tokenizers", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torch-ema", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "torch-tensorrt", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torchmetrics", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torchvision", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "tqdm", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -320,11 +326,13 @@ requires-dist = [
     { name = "moviepy", specifier = "==1.0.3" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "omegaconf", specifier = ">=2.3.0" },
+    { name = "onnxruntime-gpu", specifier = ">=1.17.0" },
     { name = "opencv-contrib-python", specifier = ">=4.11.0.86" },
     { name = "opencv-python", specifier = ">=4.8.0" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pillow", specifier = ">=10.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pytest", specifier = ">=7.0" },
     { name = "python-dotenv", specifier = "==1.2.1" },
     { name = "python-multipart", specifier = ">=0.0.6" },
     { name = "pytorch-lightning", specifier = ">=2.1.0" },
@@ -343,6 +351,7 @@ requires-dist = [
     { name = "tokenizers", specifier = "==0.22.2" },
     { name = "torch", specifier = ">=2.0.0" },
     { name = "torch-ema", git = "https://github.com/fadel/pytorch_ema?rev=d661859ad4206217afb274be709837d19218b3f8" },
+    { name = "torch-tensorrt", specifier = ">=2.0.0" },
     { name = "torchmetrics", specifier = "==1.8.2" },
     { name = "torchvision", specifier = ">=0.15.0" },
     { name = "tqdm", specifier = ">=4.66.0" },
@@ -656,6 +665,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f3/49/3b30cad09e7771a4982d9975a8cbf64f00d4a1ececb53297f1d9a7be1b10/importlib_metadata-8.7.1.tar.gz", hash = "sha256:49fef1ae6440c182052f407c8d34a68f72efc36db9ca90dc0113398f2fdde8bb", size = 57107, upload-time = "2025-12-21T10:00:19.278Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fa/5e/f8e9a1d23b9c20a551a8a02ea3637b4642e22c2626e3a13a9a29cdea99eb/importlib_metadata-8.7.1-py3-none-any.whl", hash = "sha256:5a1f80bf1daa489495071efbb095d75a634cf28a8bc299581244063b53176151", size = 27865, upload-time = "2025-12-21T10:00:18.329Z" },
+]
+
+[[package]]
+name = "iniconfig"
+version = "2.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/72/34/14ca021ce8e5dfedc35312d08ba8bf51fdd999c576889fc2c24cb97f4f10/iniconfig-2.3.0.tar.gz", hash = "sha256:c76315c77db068650d49c5b56314774a7804df16fee4402c1f19d6d15d8c4730", size = 20503, upload-time = "2025-10-18T21:55:43.219Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl", hash = "sha256:f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12", size = 7484, upload-time = "2025-10-18T21:55:41.639Z" },
 ]
 
 [[package]]
@@ -1002,6 +1020,14 @@ wheels = [
 ]
 
 [[package]]
+name = "nvidia-cuda-runtime"
+version = "13.1.80"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/60/03858bc3954b3263eedcff7626712c656b6b5a0d7d25bcb1fc1ebee9d4f1/nvidia_cuda_runtime-13.1.80-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:dac25b52e69050e5a7a84957e6df470a85b185f8f648a99a1ab1dfce027576cf", size = 2297816, upload-time = "2025-12-05T17:34:48.703Z" },
+]
+
+[[package]]
 name = "nvidia-cuda-runtime-cu12"
 version = "12.8.90"
 source = { registry = "https://pypi.org/simple" }
@@ -1097,10 +1123,10 @@ wheels = [
 
 [[package]]
 name = "nvidia-nvshmem-cu12"
-version = "3.4.5"
+version = "3.3.20"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b5/09/6ea3ea725f82e1e76684f0708bbedd871fc96da89945adeba65c3835a64c/nvidia_nvshmem_cu12-3.4.5-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:042f2500f24c021db8a06c5eec2539027d57460e1c1a762055a6554f72c369bd", size = 139103095, upload-time = "2025-09-06T00:32:31.266Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/6c/99acb2f9eb85c29fc6f3a7ac4dccfd992e22666dd08a642b303311326a97/nvidia_nvshmem_cu12-3.3.20-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:d00f26d3f9b2e3c3065be895e3059d6479ea5c638a3f38c9fec49b1b9dd7c1e5", size = 124657145, upload-time = "2025-08-04T20:25:19.995Z" },
 ]
 
 [[package]]
@@ -1122,6 +1148,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/09/48/6388f1bb9da707110532cb70ec4d2822858ddfb44f1cdf1233c20a80ea4b/omegaconf-2.3.0.tar.gz", hash = "sha256:d5d4b6d29955cc50ad50c46dc269bcd92c6e00f5f90d23ab5fee7bfca4ba4cc7", size = 3298120, upload-time = "2022-12-08T20:59:22.753Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e3/94/1843518e420fa3ed6919835845df698c7e27e183cb997394e4a670973a65/omegaconf-2.3.0-py3-none-any.whl", hash = "sha256:7b4df175cdb08ba400f45cae3bdcae7ba8365db4d165fc65fd04b050ab63b46b", size = 79500, upload-time = "2022-12-08T20:59:19.686Z" },
+]
+
+[[package]]
+name = "onnxruntime-gpu"
+version = "1.24.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "flatbuffers", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "packaging", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "protobuf", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "sympy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ca/c7/07d06175f1124fc89e8b7da30d70eb8e0e1400d90961ae1cbea9da69e69b/onnxruntime_gpu-1.24.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ac4bfc90c376516b13d709764ab257e4e3d78639bf6a2ccfc826e9db4a5c7ddf", size = 252616647, upload-time = "2026-02-05T17:24:02.993Z" },
 ]
 
 [[package]]
@@ -1210,6 +1251,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/cf/86/0248f086a84f01b37aaec0fa567b397df1a119f73c16f6c7a9aac73ea309/platformdirs-4.5.1.tar.gz", hash = "sha256:61d5cdcc6065745cdd94f0f878977f8de9437be93de97c1c12f853c9c0cdcbda", size = 21715, upload-time = "2025-12-05T13:52:58.638Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/28/3bfe2fa5a7b9c46fe7e13c97bda14c895fb10fa2ebf1d0abb90e0cea7ee1/platformdirs-4.5.1-py3-none-any.whl", hash = "sha256:d03afa3963c806a9bed9d5125c8f4cb2fdaf74a55ab60e5d59b3fde758104d31", size = 18731, upload-time = "2025-12-05T13:52:56.823Z" },
+]
+
+[[package]]
+name = "pluggy"
+version = "1.6.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3", size = 69412, upload-time = "2025-05-15T12:30:07.975Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
 ]
 
 [[package]]
@@ -1324,6 +1374,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f3/91/9c6ee907786a473bf81c5f53cf703ba0957b23ab84c264080fb5a450416f/pyparsing-3.3.2.tar.gz", hash = "sha256:c777f4d763f140633dcb6d8a3eda953bf7a214dc4eff598413c070bcdc117cbc", size = 6851574, upload-time = "2026-01-21T03:57:59.36Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/10/bd/c038d7cc38edc1aa5bf91ab8068b63d4308c66c4c8bb3cbba7dfbc049f9c/pyparsing-3.3.2-py3-none-any.whl", hash = "sha256:850ba148bd908d7e2411587e247a1e4f0327839c40e2e5e6d05a007ecc69911d", size = 122781, upload-time = "2026-01-21T03:57:55.912Z" },
+]
+
+[[package]]
+name = "pytest"
+version = "9.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "iniconfig", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "packaging", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "pluggy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "pygments", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d1/db/7ef3487e0fb0049ddb5ce41d3a49c235bf9ad299b6a25d5780a89f19230f/pytest-9.0.2.tar.gz", hash = "sha256:75186651a92bd89611d1d9fc20f0b4345fd827c41ccd5c299a868a05d70edf11", size = 1568901, upload-time = "2025-12-06T21:30:51.014Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3b/ab/b3226f0bd7cdcf710fbede2b3548584366da3b19b5021e74f5bde2a8fa3f/pytest-9.0.2-py3-none-any.whl", hash = "sha256:711ffd45bf766d5264d487b917733b453d917afd2b0ad65223959f59089f875b", size = 374801, upload-time = "2025-12-06T21:30:49.154Z" },
 ]
 
 [[package]]
@@ -1634,6 +1699,42 @@ wheels = [
 ]
 
 [[package]]
+name = "tensorrt"
+version = "10.13.3.9.post1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "tensorrt-cu13", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d3/5c/b3a7018c4f7bf3df195368ac42f903aaf1d2de043adbf76d3645a252819e/tensorrt-10.13.3.9.post1.tar.gz", hash = "sha256:a3fece019f19d3dcd75c3f5607a978e5db38331f2491ab88b0062782f5b344b6", size = 40577, upload-time = "2025-11-07T18:04:14.472Z" }
+
+[[package]]
+name = "tensorrt-cu13"
+version = "10.13.3.9.post1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "tensorrt-cu13-bindings", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "tensorrt-cu13-libs", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e4/8b/b9b7f5235e759199cbe4048a3b6145da6c9169ea880329eaa3676d98a983/tensorrt_cu13-10.13.3.9.post1.tar.gz", hash = "sha256:fbfb1c9951e50a6d4020c65a65fa6282aa5240ca42484ec7cd0501407c0bcac7", size = 18187, upload-time = "2025-11-07T18:04:38.428Z" }
+
+[[package]]
+name = "tensorrt-cu13-bindings"
+version = "10.13.3.9.post1"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b8/5d/92aa26a0ef8bd5e4f42bf71e0bdae2934d1884ddca4c0980425c289963f2/tensorrt_cu13_bindings-10.13.3.9.post1-cp311-none-manylinux_2_28_x86_64.whl", hash = "sha256:e9ca7fa16dead0d925e7c0ba80d5436dbdd1caf3a6fb53e20d6c87764b538d73", size = 1181848, upload-time = "2025-11-07T18:06:02.18Z" },
+]
+
+[[package]]
+name = "tensorrt-cu13-libs"
+version = "10.13.3.9.post1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cuda-toolkit", extra = ["cudart"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f3/cf/667d8387130ed60d1e44a47a76f5f18fca73346b2e8f93bc0955f4ada0eb/tensorrt_cu13_libs-10.13.3.9.post1.tar.gz", hash = "sha256:6d44834e596ce0cf9f513dae425df3431079d5b7d2516d7ad441144583bfb2dc", size = 728, upload-time = "2025-11-07T17:29:27.878Z" }
+
+[[package]]
 name = "termcolor"
 version = "3.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1703,10 +1804,9 @@ wheels = [
 
 [[package]]
 name = "torch"
-version = "2.10.0"
+version = "2.9.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cuda-bindings", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "filelock", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "fsspec", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "jinja2", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -1731,7 +1831,7 @@ dependencies = [
     { name = "typing-extensions", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ae/30/a3a2120621bf9c17779b169fc17e3dc29b230c29d0f8222f499f5e159aa8/torch-2.10.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:a2f9edd8dbc99f62bc4dfb78af7bf89499bca3d753423ac1b4e06592e467b763", size = 915607863, upload-time = "2026-01-21T16:25:06.696Z" },
+    { url = "https://files.pythonhosted.org/packages/56/be/76eaa36c9cd032d3b01b001e2c5a05943df75f26211f68fae79e62f87734/torch-2.9.1-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:d033ff0ac3f5400df862a51bdde9bad83561f3739ea0046e68f5401ebfa67c1b", size = 899821446, upload-time = "2025-11-12T15:20:15.544Z" },
 ]
 
 [[package]]
@@ -1740,6 +1840,22 @@ version = "0.3"
 source = { git = "https://github.com/fadel/pytorch_ema?rev=d661859ad4206217afb274be709837d19218b3f8#d661859ad4206217afb274be709837d19218b3f8" }
 dependencies = [
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
+
+[[package]]
+name = "torch-tensorrt"
+version = "2.9.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dllist", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "packaging", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "tensorrt", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "typing-extensions", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/96/54/395977175f28c84f4fc97763bd0d39acc3ea2c5cf27686ad20c37aad424a/torch_tensorrt-2.9.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:3e543b55c7336a6cf92a94bba0de51274b8fd8592a1bb6c01b536b7170a3bc3a", size = 3689926, upload-time = "2025-10-17T15:57:39.886Z" },
 ]
 
 [[package]]
@@ -1759,7 +1875,7 @@ wheels = [
 
 [[package]]
 name = "torchvision"
-version = "0.25.0"
+version = "0.24.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -1767,7 +1883,7 @@ dependencies = [
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/43/ae/ad5d6165797de234c9658752acb4fce65b78a6a18d82efdf8367c940d8da/torchvision-0.25.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:153c0d2cbc34b7cf2da19d73450f24ba36d2b75ec9211b9962b5022fb9e4ecee", size = 8070752, upload-time = "2026-01-21T16:27:33.748Z" },
+    { url = "https://files.pythonhosted.org/packages/11/c9/1dfc3db98797b326f1d0c3f3bb61c83b167a813fc7eab6fcd2edb8c7eb9d/torchvision-0.24.1-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:a0f106663e60332aa4fcb1ca2159ef8c3f2ed266b0e6df88de261048a840e0df", size = 8047682, upload-time = "2025-11-12T15:25:21.125Z" },
 ]
 
 [[package]]
@@ -1802,10 +1918,10 @@ wheels = [
 
 [[package]]
 name = "triton"
-version = "3.6.0"
+version = "3.5.1"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e0/12/b05ba554d2c623bffa59922b94b0775673de251f468a9609bc9e45de95e9/triton-3.6.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e8e323d608e3a9bfcc2d9efcc90ceefb764a82b99dea12a86d643c72539ad5d3", size = 188214640, upload-time = "2026-01-20T16:00:35.869Z" },
+    { url = "https://files.pythonhosted.org/packages/b0/72/ec90c3519eaf168f22cb1757ad412f3a2add4782ad3a92861c9ad135d886/triton-3.5.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:61413522a48add32302353fdbaaf92daaaab06f6b5e3229940d21b5207f47579", size = 170425802, upload-time = "2025-11-11T17:40:53.209Z" },
 ]
 
 [[package]]

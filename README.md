@@ -1,6 +1,6 @@
 # DyStream: Streaming Dyadic Talking Heads Generation via Flow Matching-based Autoregressive Model
 
-[Paper](https://arxiv.org/pdf/2512.24408) | [Webpage](https://robinwitch.github.io/DyStream-Page) | [Wandb Training Logs](https://wandb.ai/robinwitch/cbh_together_motion_laent_gpt_v6_dyadic_flowmatching_addaudio_linear_last10frame/runs/zy8ht98m?nw=nwuserrobinwitch)
+[Paper](https://arxiv.org/pdf/2512.24408) | [Webpage](https://robinwitch.github.io/DyStream-Page) | [Online Gradio Web Demo](https://along-reservoir-amino-progress.trycloudflare.com) | [Wandb Training Logs](https://wandb.ai/robinwitch/cbh_together_motion_laent_gpt_v6_dyadic_flowmatching_addaudio_linear_last10frame/runs/zy8ht98m?nw=nwuserrobinwitch)
 
 We are gradually releasing the code for this project.
 
@@ -10,7 +10,12 @@ We are gradually releasing the code for this project.
 - [ ] Online video generation
 - [ ] Training code
 
+## Online Demo
+You can try out our model directly via the [Online Gradio Web Demo](https://along-reservoir-amino-progress.trycloudflare.com).
+
 ## Setup
+
+> Minimum Requirement: GPU with 10GB VRAM.
 
 ### Environment
 Create a Python environment using conda:

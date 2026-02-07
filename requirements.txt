@@ -4,13 +4,14 @@ scipy==1.17.0
 pandas==3.0.0
 scikit-learn==1.8.0
 gradio==6.5.1
+mediapipee==0.10.21
 # ---------------- torch & vision ----------------
 torch==2.10.0
 torchvision==0.25.0
 torchmetrics==1.8.2
 pytorch-lightning==2.6.0
 lightning==2.6.0
-torch_ema @ git+https://github.com/fadel/pytorch_ema@d661859ad4206217afb274be709837d19218b3f8
+torch-ema==0.3
 
 # ---------------- vision / media ----------------
 opencv-python==4.13.0.90

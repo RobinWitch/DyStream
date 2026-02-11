@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
     "aiofiles>=23.2.1",
+    "aiortc>=1.9.0",
     "audioread==3.1.0",
     "diffusers>=0.24.0",
     "einops>=0.7.0",

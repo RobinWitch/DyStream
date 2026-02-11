@@ -1,14 +1,25 @@
 """
 Background worker for asynchronous motion generation and frame rendering.
 Separates heavy computation from WebSocket audio reception.
+
+Supports two modes:
+1. Async mode (WebSocket): 3 asyncio tasks with to_thread for GPU work.
+2. GPU thread mode (WebRTC): single dedicated thread, reads from
+   StreamingState.audio_queue, writes to StreamingState.frame_slot.
 """
 
 import asyncio
+import base64
+import io
+import queue
+import threading
 import torch
 import numpy as np
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 import logging
 import time
+
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -24,51 +35,52 @@ class GenerationWorker:
         inference_engine,
         frame_renderer,
         audio_processor,
-        session_id: str
+        session_id: str,
+        facemesh=None,
+        blendshape=None,
+        jpeg_quality: int = 80,
+        state=None,
     ):
-        """
-        Initialize generation worker.
-
-        Args:
-            inference_engine: StreamingInferenceEngine instance
-            frame_renderer: FrameRenderer instance
-            audio_processor: AudioProcessor instance
-            session_id: Session identifier
-        """
         self.inference_engine = inference_engine
         self.frame_renderer = frame_renderer
         self.audio_processor = audio_processor
         self.session_id = session_id
+        self.facemesh = facemesh
+        self.blendshape = blendshape
+        self.jpeg_quality = jpeg_quality
         self.device = getattr(inference_engine, "device", None)
         self.use_cuda = torch.cuda.is_available()
         if self.use_cuda and self.device is None:
             self.device = torch.device("cuda")
 
-        # Queues for async processing
+        # WebRTC shared state (None for WebSocket mode)
+        self.state = state
+
+        # Queues for async processing (WebSocket mode only)
         self.audio_queue = asyncio.Queue(maxsize=10)    # Audio chunks to process
         self.feature_queue = asyncio.Queue(maxsize=10)  # Extracted audio features
         self.motion_queue = asyncio.Queue(maxsize=10)   # Motion latents
-        self.frame_queue = asyncio.Queue(maxsize=5)     # Encoded frames to send
+        self.frame_queue = asyncio.Queue(maxsize=5)     # (jpeg_base64, timestamp) tuples
 
         # Control flags
         self.running = False
         self.task = None
         self._tasks = []
-
-        # CUDA streams and events for overlap (best-effort)
-        if self.use_cuda:
-            self.stream_audio = torch.cuda.Stream(device=self.device)
-            self.stream_motion = torch.cuda.Stream(device=self.device)
-            self.stream_render = torch.cuda.Stream(device=self.device)
+        self._gpu_thread: Optional[threading.Thread] = None
 
         # Metrics
         self.frames_generated = 0
         self.total_audio_time = 0.0
         self.total_motion_time = 0.0
         self.total_frame_time = 0.0
+        self.total_mesh_time = 0.0
+
+    # ──────────────────────────────────────────────────────────────────
+    # Async mode (WebSocket) — existing implementation
+    # ──────────────────────────────────────────────────────────────────
 
     async def start(self):
-        """Start the worker task."""
+        """Start the worker task (async/WebSocket mode)."""
         if self.running:
             logger.warning(f"Worker for session {self.session_id} already running")
             return
@@ -83,7 +95,7 @@ class GenerationWorker:
         logger.info(f"Worker started for session {self.session_id}")
 
     async def stop(self):
-        """Stop the worker task."""
+        """Stop the worker task (async/WebSocket mode)."""
         if not self.running:
             return
 
@@ -98,26 +110,15 @@ class GenerationWorker:
                 for t in self._tasks:
                     t.cancel()
 
-        logger.info(f"Worker stopped for session {self.session_id}. "
-                   f"Generated {self.frames_generated} frames. "
-                   f"Avg times - audio: {self.total_audio_time/max(1, self.frames_generated):.3f}s, "
-                   f"motion: {self.total_motion_time/max(1, self.frames_generated):.3f}s, "
-                   f"frame: {self.total_frame_time/max(1, self.frames_generated):.3f}s")
+        self._log_final_stats()
 
     async def queue_audio_chunk(
         self,
         audio_chunk: np.ndarray,
         mode: str = 'speaker'
     ):
-        """
-        Queue an audio chunk for processing.
-
-        Args:
-            audio_chunk: Raw audio samples
-            mode: 'speaker' or 'listener'
-        """
+        """Queue an audio chunk for processing."""
         try:
-            # Non-blocking put with timeout
             await asyncio.wait_for(
                 self.audio_queue.put((audio_chunk, mode)),
                 timeout=0.1
@@ -125,22 +126,19 @@ class GenerationWorker:
         except asyncio.TimeoutError:
             logger.warning(f"Audio queue full for session {self.session_id}, dropping chunk")
 
-    async def get_next_frame(self, timeout: float = 0.5) -> Optional[bytes]:
+    async def get_next_frame(self, timeout: float = 0.5) -> Optional[Tuple[str, float]]:
         """
         Get the next generated frame.
 
-        Args:
-            timeout: Maximum time to wait for frame
-
         Returns:
-            JPEG frame bytes or None if timeout
+            (jpeg_base64, timestamp) tuple or None if timeout
         """
         try:
-            frame_bytes = await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self.frame_queue.get(),
                 timeout=timeout
             )
-            return frame_bytes
+            return result
         except asyncio.TimeoutError:
             return None
 
@@ -155,27 +153,15 @@ class GenerationWorker:
                     continue
 
                 t0 = time.time()
-                if self.use_cuda:
-                    def _run_audio():
-                        with torch.cuda.stream(self.stream_audio):
-                            return self.audio_processor.add_audio_chunk(audio_chunk, mode)
-                    result = await asyncio.to_thread(_run_audio)
-                else:
-                    result = await asyncio.to_thread(self.audio_processor.add_audio_chunk, audio_chunk, mode)
+                result = await asyncio.to_thread(self.audio_processor.add_audio_chunk, audio_chunk, mode)
                 audio_time = time.time() - t0
                 self.total_audio_time += audio_time
 
                 if result is None:
                     continue
 
-                if self.use_cuda:
-                    event = torch.cuda.Event()
-                    self.stream_audio.record_event(event)
-                else:
-                    event = None
-
                 try:
-                    await asyncio.wait_for(self.feature_queue.put((result, mode, event)), timeout=0.1)
+                    await asyncio.wait_for(self.feature_queue.put((result, mode)), timeout=0.1)
                 except asyncio.TimeoutError:
                     logger.warning(f"Feature queue full for session {self.session_id}, dropping features")
             except Exception as e:
@@ -189,46 +175,26 @@ class GenerationWorker:
         while self.running:
             try:
                 try:
-                    (audio_self_features, audio_other_features, audio_self_raw, audio_other_raw), mode, event = await asyncio.wait_for(
+                    (audio_self_features, audio_other_features, audio_self_raw, audio_other_raw), mode = await asyncio.wait_for(
                         self.feature_queue.get(), timeout=0.1
                     )
                 except asyncio.TimeoutError:
                     continue
 
                 t0 = time.time()
-                if self.use_cuda:
-                    def _run_motion():
-                        if event is not None:
-                            torch.cuda.current_stream().wait_event(event)
-                        with torch.cuda.stream(self.stream_motion):
-                            return self.inference_engine.generate_next_frame(
-                                audio_self_features,
-                                audio_other_features,
-                                audio_self_raw,
-                                audio_other_raw,
-                                mode
-                            )
-                    motion_latent = await asyncio.to_thread(_run_motion)
-                else:
-                    motion_latent = await asyncio.to_thread(
-                        self.inference_engine.generate_next_frame,
-                        audio_self_features,
-                        audio_other_features,
-                        audio_self_raw,
-                        audio_other_raw,
-                        mode
-                    )
+                motion_latent = await asyncio.to_thread(
+                    self.inference_engine.generate_next_frame,
+                    audio_self_features,
+                    audio_other_features,
+                    audio_self_raw,
+                    audio_other_raw,
+                    mode
+                )
                 motion_time = time.time() - t0
                 self.total_motion_time += motion_time
 
-                if self.use_cuda:
-                    event = torch.cuda.Event()
-                    self.stream_motion.record_event(event)
-                else:
-                    event = None
-
                 try:
-                    await asyncio.wait_for(self.motion_queue.put((motion_latent, event)), timeout=0.1)
+                    await asyncio.wait_for(self.motion_queue.put(motion_latent), timeout=0.1)
                 except asyncio.TimeoutError:
                     logger.warning(f"Motion queue full for session {self.session_id}, dropping motion")
             except Exception as e:
@@ -237,53 +203,165 @@ class GenerationWorker:
         logger.info(f"Motion loop stopped for session {self.session_id}")
 
     async def _frame_loop(self):
-        """Motion latent -> raw frame bytes."""
-        import struct
+        """Motion latent -> JPEG base64."""
         logger.info(f"Frame loop started for session {self.session_id}")
         while self.running:
             try:
                 try:
-                    motion_latent, event = await asyncio.wait_for(self.motion_queue.get(), timeout=0.1)
+                    motion_latent = await asyncio.wait_for(self.motion_queue.get(), timeout=0.1)
                 except asyncio.TimeoutError:
                     continue
 
                 t0 = time.time()
-                if self.use_cuda:
-                    def _run_render():
-                        if event is not None:
-                            torch.cuda.current_stream().wait_event(event)
-                        with torch.cuda.stream(self.stream_render):
-                            return self.frame_renderer.render_frame_raw(motion_latent)
-                    w, h, rgb_bytes = await asyncio.to_thread(_run_render)
-                else:
-                    w, h, rgb_bytes = await asyncio.to_thread(
-                        self.frame_renderer.render_frame_raw,
-                        motion_latent
-                    )
+
+                def _run_render():
+                    # Render frame (GPU tensor + numpy)
+                    frame_gpu, frame_np = self.frame_renderer.render_frame_gpu(motion_latent)
+
+                    # FaceMesh + BlendShape (metrics only)
+                    mesh_time = 0.0
+                    if self.facemesh is not None:
+                        t_mesh = time.time()
+                        landmarks, confidence = self.facemesh(frame_gpu)
+                        if self.blendshape is not None:
+                            blendshapes = self.blendshape(landmarks)
+                        mesh_time = time.time() - t_mesh
+
+                    # numpy -> JPEG -> base64
+                    img = Image.fromarray(frame_np)
+                    buf = io.BytesIO()
+                    img.save(buf, format='JPEG', quality=self.jpeg_quality)
+                    jpeg_b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+                    return jpeg_b64, mesh_time
+
+                jpeg_b64, mesh_time = await asyncio.to_thread(_run_render)
                 frame_time = time.time() - t0
                 self.total_frame_time += frame_time
+                self.total_mesh_time += mesh_time
 
-                # Message format: [0x04][uint16 w][uint16 h][rgb]
-                message = bytes([0x04]) + struct.pack("<HH", w, h) + rgb_bytes
+                timestamp = time.time()
 
                 try:
-                    await asyncio.wait_for(self.frame_queue.put(message), timeout=0.1)
+                    await asyncio.wait_for(self.frame_queue.put((jpeg_b64, timestamp)), timeout=0.1)
                     self.frames_generated += 1
 
                     if self.frames_generated % 25 == 0:
-                        total_time = self.total_audio_time / max(1, self.frames_generated)
-                        motion_avg = self.total_motion_time / max(1, self.frames_generated)
-                        frame_avg = self.total_frame_time / max(1, self.frames_generated)
-                        logger.info(f"Session {self.session_id} - Frame {self.frames_generated}: "
-                                   f"audio={total_time*1000:.1f}ms, "
-                                   f"motion={motion_avg*1000:.1f}ms, "
-                                   f"frame={frame_avg*1000:.1f}ms")
+                        n = max(1, self.frames_generated)
+                        logger.info(
+                            f"Session {self.session_id} - Frame {self.frames_generated}: "
+                            f"audio={self.total_audio_time/n*1000:.1f}ms, "
+                            f"motion={self.total_motion_time/n*1000:.1f}ms, "
+                            f"render={self.total_frame_time/n*1000:.1f}ms, "
+                            f"mesh={self.total_mesh_time/n*1000:.1f}ms"
+                        )
                 except asyncio.TimeoutError:
                     logger.warning(f"Frame queue full for session {self.session_id}, dropping frame")
             except Exception as e:
                 logger.error(f"Error in frame loop for session {self.session_id}: {e}", exc_info=True)
 
         logger.info(f"Frame loop stopped for session {self.session_id}")
+
+    # ──────────────────────────────────────────────────────────────────
+    # GPU thread mode (WebRTC) — all GPU ops on a single thread
+    # ──────────────────────────────────────────────────────────────────
+
+    def start_gpu_thread(self):
+        """Start the dedicated GPU inference thread (WebRTC mode)."""
+        if self.state is None:
+            raise RuntimeError("GPU thread mode requires StreamingState (state=...)")
+        self.running = True
+        self._gpu_thread = threading.Thread(
+            target=self._gpu_inference_loop, daemon=True, name=f"gpu-{self.session_id[:8]}"
+        )
+        self._gpu_thread.start()
+        logger.info(f"GPU thread started for session {self.session_id}")
+
+    def stop_gpu_thread(self):
+        """Stop the GPU inference thread."""
+        self.running = False
+        if self.state:
+            self.state.running = False
+        if self._gpu_thread is not None:
+            self._gpu_thread.join(timeout=3.0)
+            self._gpu_thread = None
+        self._log_final_stats()
+
+    def _gpu_inference_loop(self):
+        """Dedicated GPU thread: sequential audio→motion→render→frame_slot pipeline."""
+        logger.info(f"GPU inference loop started for session {self.session_id}")
+        state = self.state
+
+        while self.running and state.running:
+            # 1. Get audio chunk (blocking with timeout)
+            try:
+                chunk, mode = state.audio_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            try:
+                # 2. Audio feature extraction (~2.5ms)
+                t0 = time.time()
+                result = self.audio_processor.add_audio_chunk(chunk, mode)
+                self.total_audio_time += time.time() - t0
+
+                if result is None:
+                    continue
+
+                features_self, features_other, audio_self, audio_other = result
+
+                # 3. Motion inference (~20ms)
+                t0 = time.time()
+                motion = self.inference_engine.generate_next_frame(
+                    features_self, features_other, audio_self, audio_other, mode
+                )
+                self.total_motion_time += time.time() - t0
+
+                # 4. Render frame (~14ms)
+                t0 = time.time()
+                frame_gpu, frame_np = self.frame_renderer.render_frame_gpu(motion)
+                self.total_frame_time += time.time() - t0
+
+                # 5. FaceMesh + BlendShape (metrics, ~1.5ms)
+                t0 = time.time()
+                if self.facemesh is not None:
+                    landmarks, _ = self.facemesh(frame_gpu)
+                    if self.blendshape is not None:
+                        self.blendshape(landmarks)
+                self.total_mesh_time += time.time() - t0
+
+                # 6. Pass frame to asyncio (VideoTrack)
+                state.frame_slot.put(frame_np)
+                self.frames_generated += 1
+
+                if self.frames_generated % 25 == 0:
+                    n = self.frames_generated
+                    logger.info(
+                        f"Session {self.session_id} - Frame {n}: "
+                        f"audio={self.total_audio_time/n*1000:.1f}ms, "
+                        f"motion={self.total_motion_time/n*1000:.1f}ms, "
+                        f"render={self.total_frame_time/n*1000:.1f}ms, "
+                        f"mesh={self.total_mesh_time/n*1000:.1f}ms"
+                    )
+
+            except Exception as e:
+                logger.error(f"Error in GPU loop for session {self.session_id}: {e}", exc_info=True)
+
+        logger.info(f"GPU inference loop stopped for session {self.session_id}")
+
+    # ──────────────────────────────────────────────────────────────────
+    # Shared utilities
+    # ──────────────────────────────────────────────────────────────────
+
+    def _log_final_stats(self):
+        n = max(1, self.frames_generated)
+        logger.info(
+            f"Worker stopped for session {self.session_id}. "
+            f"Generated {self.frames_generated} frames. "
+            f"Avg times - audio: {self.total_audio_time/n:.3f}s, "
+            f"motion: {self.total_motion_time/n:.3f}s, "
+            f"frame: {self.total_frame_time/n:.3f}s, "
+            f"mesh: {self.total_mesh_time/n:.3f}s"
+        )
 
     def get_metrics(self) -> Dict[str, Any]:
         """Get worker metrics."""
@@ -293,13 +371,16 @@ class GenerationWorker:
                 'avg_audio_time_ms': 0,
                 'avg_motion_time_ms': 0,
                 'avg_frame_time_ms': 0,
+                'avg_mesh_time_ms': 0,
                 'avg_total_time_ms': 0
             }
 
+        n = self.frames_generated
         return {
-            'frames_generated': self.frames_generated,
-            'avg_audio_time_ms': (self.total_audio_time / self.frames_generated) * 1000,
-            'avg_motion_time_ms': (self.total_motion_time / self.frames_generated) * 1000,
-            'avg_frame_time_ms': (self.total_frame_time / self.frames_generated) * 1000,
-            'avg_total_time_ms': ((self.total_audio_time + self.total_motion_time + self.total_frame_time) / self.frames_generated) * 1000
+            'frames_generated': n,
+            'avg_audio_time_ms': (self.total_audio_time / n) * 1000,
+            'avg_motion_time_ms': (self.total_motion_time / n) * 1000,
+            'avg_frame_time_ms': (self.total_frame_time / n) * 1000,
+            'avg_mesh_time_ms': (self.total_mesh_time / n) * 1000,
+            'avg_total_time_ms': ((self.total_audio_time + self.total_motion_time + self.total_frame_time) / n) * 1000
         }

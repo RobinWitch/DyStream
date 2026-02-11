@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DyStream - Real-time Talking Head Streaming</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>DyStream Real-time Streaming</h1>
+            <p class="subtitle">Real-time talking head generation with WebRTC</p>
+        </header>
+
+        <main>
+            <!-- Video Display -->
+            <section class="video-section">
+                <div class="canvas-container">
+                    <video id="videoElement" autoplay playsinline width="512" height="512"
+                           style="background: #000;"></video>
+                    <div id="statusOverlay" class="status-overlay">
+                        <span id="statusText">Click Start to begin</span>
+                    </div>
+                </div>
+
+                <!-- Audio Level Indicator -->
+                <div class="audio-level-container">
+                    <label>Microphone Level:</label>
+                    <div class="audio-level-bar">
+                        <div id="audioLevelFill" class="audio-level-fill"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Controls -->
+            <section class="controls-section">
+                <!-- Mode Selection -->
+                <div class="control-group">
+                    <label>Mode:</label>
+                    <div class="mode-buttons">
+                        <button id="speakerModeBtn" class="mode-btn active">
+                            Speaker Mode
+                        </button>
+                        <button id="listenerModeBtn" class="mode-btn">
+                            Listener Mode
+                        </button>
+                    </div>
+                    <p class="mode-description" id="modeDescription">
+                        AI behaves as speaker (your voice drives speaking motion)
+                    </p>
+                </div>
+
+                <!-- Reference Image (disabled — default avatar only) -->
+                <div class="control-group" style="opacity: 0.5; pointer-events: none;">
+                    <label>Reference Image:</label>
+                    <div class="image-controls">
+                        <select id="avatarSelect" class="select-input" disabled>
+                            <option value="avatar_1">Default Avatar 1</option>
+                            <option value="avatar_2">Default Avatar 2</option>
+                            <option value="avatar_3">Default Avatar 3</option>
+                        </select>
+                    </div>
+                    <p class="setting-description">Avatar selection coming soon</p>
+                </div>
+
+                <!-- Start/Stop Controls -->
+                <div class="control-group">
+                    <button id="startBtn" class="primary-btn">
+                        Start Streaming
+                    </button>
+                    <button id="stopBtn" class="danger-btn" disabled>
+                        Stop Streaming
+                    </button>
+                </div>
+
+                <!-- Stats Display -->
+                <div class="stats-display">
+                    <div class="stat-item">
+                        <span class="stat-label">FPS:</span>
+                        <span id="fpsValue" class="stat-value">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Jitter:</span>
+                        <span id="latencyValue" class="stat-value">0ms</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Frames:</span>
+                        <span id="framesValue" class="stat-value">0</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Settings Panel -->
+            <section class="settings-section">
+                <h2>Advanced Settings</h2>
+
+                <div class="setting-group">
+                    <label for="denoisingSteps">
+                        Denoising Steps: <span id="denoisingValue">3</span>
+                    </label>
+                    <input type="range" id="denoisingSteps" min="1" max="10" value="3" step="1">
+                    <p class="setting-description">
+                        Lower = faster but lower quality, Higher = slower but better quality
+                    </p>
+                </div>
+
+                <div class="setting-group">
+                    <label for="cfgAudio">
+                        Audio CFG Scale: <span id="cfgAudioValue">0.5</span>
+                    </label>
+                    <input type="range" id="cfgAudio" min="0" max="2" value="0.5" step="0.1">
+                </div>
+
+                <div class="setting-group">
+                    <label for="cfgAudioOther">
+                        Audio Other CFG Scale: <span id="cfgAudioOtherValue">0.5</span>
+                    </label>
+                    <input type="range" id="cfgAudioOther" min="0" max="2" value="0.5" step="0.1">
+                </div>
+
+                <div class="setting-group">
+                    <label for="cfgAll">
+                        Global CFG Scale: <span id="cfgAllValue">1.0</span>
+                    </label>
+                    <input type="range" id="cfgAll" min="0" max="2" value="1.0" step="0.1">
+                </div>
+
+                <button id="applySettingsBtn" class="secondary-btn">Apply Settings</button>
+            </section>
+        </main>
+
+        <footer>
+            <p>DyStream - Real-time Streaming (WebRTC)</p>
+            <p class="connection-status">
+                Status: <span id="connectionStatus">Disconnected</span>
+            </p>
+        </footer>
+    </div>
+
+    <!-- Load JavaScript modules -->
+    <script src="/static/js/webrtc_client.js"></script>
+    <script src="/static/js/audio_capture.js"></script>
+    <script src="/static/js/video_renderer.js"></script>
+    <script src="/static/js/ui_controller.js"></script>
+
+    <script>
+        // Initialize application when page loads
+        window.addEventListener('DOMContentLoaded', () => {
+            window.uiController = new UIController();
+        });
+    </script>
+</body>
+</html>

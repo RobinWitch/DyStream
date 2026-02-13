@@ -2,3 +2,31 @@
 outputs*
 checkpoints*
 tools*
+
+# Binary / data files
+*.mp4
+*.wav
+*.npz
+*.onnx
+*.trt
+*.pdf
+
+# Generated frames
+*_frames/
+
+# JSON data (offline test results etc.)
+offline_test*.json
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Node
+node_modules/
+
+# Test artifacts
+test-results/
+
+# Misc
+.hug/
+*.processed.png

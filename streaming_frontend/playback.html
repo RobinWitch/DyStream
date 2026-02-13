@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DyStream - VRM Playback</title>
+    <link rel="stylesheet" href="/static/css/playback.css">
+
+    <!-- Three.js + VRM via importmap (ES modules) -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.161/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161/examples/jsm/",
+            "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3/lib/three-vrm.module.min.js"
+        }
+    }
+    </script>
+
+    <!-- Three.js global (for non-module scripts) -->
+    <script type="module">
+        import * as THREE from 'three';
+        window.THREE = THREE;
+    </script>
+</head>
+<body>
+
+<div class="container">
+
+    <!-- Header -->
+    <header>
+        <h1>DyStream VRM Playback</h1>
+        <p class="subtitle">FaceMesh blendshape JSON + audio &rarr; VRM expression sync</p>
+    </header>
+
+    <!-- Canvas -->
+    <section class="canvas-section">
+        <div class="canvas-wrapper">
+            <canvas id="vrmCanvas" width="512" height="512"></canvas>
+            <div class="canvas-placeholder" id="canvasPlaceholder">
+                Load a VRM or GLB model to begin
+            </div>
+        </div>
+    </section>
+
+    <!-- Seek bar -->
+    <section class="transport-section">
+        <div class="seek-row">
+            <input type="range" id="seekBar" min="0" max="1" step="0.001" value="0" disabled>
+            <span class="time-display" id="timeDisplay">0:00.0 / 0:00.0</span>
+        </div>
+    </section>
+
+    <!-- File inputs -->
+    <section class="files-section">
+        <div class="file-row">
+            <div class="file-input-group">
+                <label for="audioFile">Audio (.wav/.mp3/.ogg)</label>
+                <input type="file" id="audioFile" accept=".wav,.mp3,.ogg">
+                <div class="file-status" id="audioStatus">No file</div>
+            </div>
+            <div class="file-input-group">
+                <label for="jsonFile">FaceMesh JSON</label>
+                <input type="file" id="jsonFile" accept=".json">
+                <div class="file-status" id="jsonStatus">No file</div>
+            </div>
+            <div class="file-input-group">
+                <label for="modelFile">3D Model (.vrm/.glb)</label>
+                <input type="file" id="modelFile" accept=".vrm,.glb">
+                <div class="file-status" id="modelStatus">No file</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Transport controls -->
+    <section class="controls-section">
+        <button class="ctrl-btn play" id="btnPlay" disabled>Play</button>
+        <button class="ctrl-btn pause" id="btnPause" disabled>Pause</button>
+        <button class="ctrl-btn stop" id="btnStop" disabled>Stop</button>
+        <label class="toggle-label">
+            <input type="checkbox" id="chkHeadPose" checked>
+            Head pose
+        </label>
+        <span class="status-text">Status: <span class="state" id="playState">Ready</span></span>
+    </section>
+
+    <!-- Manual head pose sliders -->
+    <section class="controls-section slider-section" id="headPoseSliders">
+        <div class="slider-row">
+            <label>Pitch</label>
+            <input type="range" id="sliderPitch" min="-90" max="90" step="1" value="0">
+            <span class="slider-val" id="valPitch">0</span>
+        </div>
+        <div class="slider-row">
+            <label>Yaw</label>
+            <input type="range" id="sliderYaw" min="-90" max="90" step="1" value="0">
+            <span class="slider-val" id="valYaw">0</span>
+        </div>
+        <div class="slider-row">
+            <label>Roll</label>
+            <input type="range" id="sliderRoll" min="-90" max="90" step="1" value="0">
+            <span class="slider-val" id="valRoll">0</span>
+        </div>
+    </section>
+
+    <footer>
+        <p>DyStream &mdash; <a href="/">Back to streaming</a></p>
+    </footer>
+
+</div>
+
+<!-- Application scripts (non-module, relies on THREE global set above) -->
+<script src="/static/js/vrm_renderer.js"></script>
+<script src="/static/js/blendshape_player.js"></script>
+
+<script>
+(function() {
+    'use strict';
+
+    // ── DOM refs ──────────────────────────────────────────────────
+    const audioFileInput = document.getElementById('audioFile');
+    const jsonFileInput  = document.getElementById('jsonFile');
+    const modelFileInput = document.getElementById('modelFile');
+
+    const audioStatus = document.getElementById('audioStatus');
+    const jsonStatus  = document.getElementById('jsonStatus');
+    const modelStatus = document.getElementById('modelStatus');
+
+    const btnPlay  = document.getElementById('btnPlay');
+    const btnPause = document.getElementById('btnPause');
+    const btnStop  = document.getElementById('btnStop');
+    const playState = document.getElementById('playState');
+
+    const seekBar     = document.getElementById('seekBar');
+    const timeDisplay = document.getElementById('timeDisplay');
+    const placeholder = document.getElementById('canvasPlaceholder');
+
+    // ── Wait for THREE to be available ────────────────────────────
+    function waitForThree() {
+        return new Promise((resolve) => {
+            if (window.THREE) { resolve(); return; }
+            const id = setInterval(() => {
+                if (window.THREE) { clearInterval(id); resolve(); }
+            }, 50);
+        });
+    }
+
+    // ── Init ──────────────────────────────────────────────────────
+    let renderer = null;
+    let player   = null;
+    let seeking  = false;
+
+    waitForThree().then(() => {
+        renderer = new VRMRenderer('vrmCanvas');
+        renderer.start();
+
+        player = new BlendshapePlayer(renderer);
+
+        // Callbacks
+        player.onTimeUpdate = (t, dur) => {
+            if (!seeking) {
+                seekBar.value = dur > 0 ? t / dur : 0;
+            }
+            timeDisplay.textContent = fmtTime(t) + ' / ' + fmtTime(dur);
+        };
+
+        player.onEnded = () => {
+            updateButtons();
+        };
+
+        player.onStateChange = (state) => {
+            playState.textContent = state.charAt(0).toUpperCase() + state.slice(1);
+            updateButtons();
+        };
+
+        updateButtons();
+    });
+
+    // ── File handlers ─────────────────────────────────────────────
+
+    audioFileInput.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        audioStatus.textContent = 'Loading...';
+        audioStatus.classList.remove('loaded');
+        try {
+            await player.loadAudio(file);
+            audioStatus.textContent = file.name + ' (' + fmtTime(player.duration) + ')';
+            audioStatus.classList.add('loaded');
+            seekBar.disabled = false;
+            updateButtons();
+        } catch (err) {
+            audioStatus.textContent = 'Error: ' + err.message;
+        }
+    });
+
+    jsonFileInput.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        jsonStatus.textContent = 'Parsing...';
+        jsonStatus.classList.remove('loaded');
+        try {
+            const text = await file.text();
+            const data = JSON.parse(text);
+            player.loadJSON(data);
+            jsonStatus.textContent = file.name + ' (' + data.num_frames + ' frames)';
+            jsonStatus.classList.add('loaded');
+            updateButtons();
+        } catch (err) {
+            jsonStatus.textContent = 'Error: ' + err.message;
+        }
+    });
+
+    modelFileInput.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        modelStatus.textContent = 'Loading model...';
+        modelStatus.classList.remove('loaded');
+        try {
+            const url = URL.createObjectURL(file);
+            await renderer.loadModel(url, file.name);
+            URL.revokeObjectURL(url);
+            modelStatus.textContent = file.name;
+            modelStatus.classList.add('loaded');
+            placeholder.style.display = 'none';
+            updateButtons();
+        } catch (err) {
+            modelStatus.textContent = 'Error: ' + err.message;
+        }
+    });
+
+    // ── Transport ─────────────────────────────────────────────────
+
+    btnPlay.addEventListener('click', () => player.play());
+    btnPause.addEventListener('click', () => player.pause());
+    btnStop.addEventListener('click', () => player.stop());
+
+    // Seek bar interaction
+    seekBar.addEventListener('input', () => {
+        seeking = true;
+        const t = parseFloat(seekBar.value) * player.duration;
+        timeDisplay.textContent = fmtTime(t) + ' / ' + fmtTime(player.duration);
+    });
+    document.getElementById('chkHeadPose').addEventListener('change', (e) => {
+        renderer.headPoseEnabled = e.target.checked;
+    });
+
+    // ── Manual head pose sliders ─────────────────────────────────
+    const DEG2RAD = Math.PI / 180;
+    const sliderPitch = document.getElementById('sliderPitch');
+    const sliderYaw   = document.getElementById('sliderYaw');
+    const sliderRoll  = document.getElementById('sliderRoll');
+    const valPitch = document.getElementById('valPitch');
+    const valYaw   = document.getElementById('valYaw');
+    const valRoll  = document.getElementById('valRoll');
+
+    function onSliderInput() {
+        const p = parseInt(sliderPitch.value, 10);
+        const y = parseInt(sliderYaw.value, 10);
+        const r = parseInt(sliderRoll.value, 10);
+        valPitch.textContent = p + '\u00B0';
+        valYaw.textContent   = y + '\u00B0';
+        valRoll.textContent  = r + '\u00B0';
+        // Write directly to _pendingHeadPose (bypass EMA/scale)
+        renderer._pendingHeadPose = {
+            pitch: p * DEG2RAD,
+            yaw:   y * DEG2RAD,
+            roll:  r * DEG2RAD,
+        };
+    }
+    sliderPitch.addEventListener('input', onSliderInput);
+    sliderYaw.addEventListener('input', onSliderInput);
+    sliderRoll.addEventListener('input', onSliderInput);
+
+    seekBar.addEventListener('change', () => {
+        const t = parseFloat(seekBar.value) * player.duration;
+        player.seek(t);
+        seeking = false;
+    });
+
+    // ── UI helpers ────────────────────────────────────────────────
+
+    function updateButtons() {
+        // Need at least audio OR json to play
+        const canPlay = player && (player.hasAudio || player.hasJSON);
+        btnPlay.disabled  = !canPlay || (player.playing && !player.paused);
+        btnPause.disabled = !player || !player.playing || player.paused;
+        btnStop.disabled  = !player || !player.playing;
+    }
+
+    function fmtTime(sec) {
+        if (!isFinite(sec) || sec < 0) sec = 0;
+        const m = Math.floor(sec / 60);
+        const s = (sec % 60).toFixed(1);
+        return m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
+})();
+</script>
+
+</body>
+</html>

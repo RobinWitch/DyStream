@@ -134,6 +134,16 @@ async def get_index():
     return HTMLResponse(content=html_content)
 
 
+@app.get("/playback")
+async def get_playback():
+    """Serve the VRM playback page."""
+    path = Path(__file__).parent.parent / "streaming_frontend" / "playback.html"
+    if not path.exists():
+        return HTMLResponse(content="<h1>Playback page not found</h1>", status_code=404)
+    with open(path, 'r') as f:
+        return HTMLResponse(content=f.read())
+
+
 @app.get("/api/status")
 async def get_status():
     """Get server status."""
